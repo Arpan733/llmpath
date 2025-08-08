@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "878699620535",
+    "project_id": "llmpath-28580",
+    "storage_bucket": "llmpath-28580.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:878699620535:android:8c4f646a4aed4c0e170532",
+        "android_client_info": {
+          "package_name": "com.example.llmpath"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDFTyAxiYhVo0x1-4Z5OhocbptbFN8xxk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
