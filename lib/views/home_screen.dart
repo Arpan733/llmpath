@@ -1,12 +1,13 @@
-import 'dart:io';
+import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:record/record.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, Uint8List;
+import 'dart:html' as html;
+import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import '../widgets/title_bar.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -18,50 +19,100 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   // AudioControls
-  final _record = AudioRecorder();
-  bool _isRecording = false;
-  String? _filePath;
+  bool isRecording = false;
+  html.MediaRecorder? _mediaRecorder;
+  html.MediaStream? _mediaStream;
+  final List<html.Blob> _chunks = [];
 
-  Future<void> _startRecording() async {
-    final status = await Permission.microphone.request();
-
-    if (status != PermissionStatus.granted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Microphone permission denied')));
-      return;
-    }
-
-    print("status $status");
-    Directory appDocDir = await getApplicationDocumentsDirectory();
-    String path =
-        '${appDocDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    print("path: $path");
-    await _record.start(const RecordConfig(), path: path);
-    print("record: $_record");
-
-    setState(() {
-      _isRecording = true;
-      _filePath = path;
-    });
-  }
-
-  Future<void> _stopRecording() async {
-    await _record.stop();
-    setState(() {
-      _isRecording = false;
-    });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Recording saved at $_filePath')));
-  }
-
-  void _toggleRecording() async {
-    if (_isRecording) {
-      await _stopRecording();
+  void toggleRecording() async {
+    if (isRecording) {
+      // Stop recording
+      _mediaRecorder?.stop();
+      _mediaStream?.getTracks().forEach((track) => track.stop());
+      setState(() => isRecording = false);
     } else {
-      await _startRecording();
+      // Start recording
+      final stream = await html.window.navigator.mediaDevices!.getUserMedia({
+        'audio': true,
+      });
+
+      _mediaStream = stream;
+      _chunks.clear();
+      _mediaRecorder = html.MediaRecorder(stream);
+
+      _mediaRecorder!.addEventListener('dataavailable', (event) {
+        final blobEvent = event as html.BlobEvent;
+        _chunks.add(blobEvent.data!);
+      });
+
+      _mediaRecorder!.addEventListener('stop', (event) async {
+        final blob = html.Blob(_chunks, 'audio/webm');
+        await sendAudio(blob);
+      });
+
+      _mediaRecorder!.start();
+      setState(() => isRecording = true);
     }
+  }
+
+  Future<Uint8List> blobToBytes(html.Blob blob) {
+    final completer = Completer<Uint8List>();
+    final reader = html.FileReader();
+
+    reader.readAsArrayBuffer(blob);
+
+    reader.onLoad.listen((event) {
+      final result = reader.result;
+      if (result is Uint8List) {
+        completer.complete(result);
+      } else if (result is ByteBuffer) {
+        completer.complete(result.asUint8List());
+      } else {
+        completer.completeError('Unexpected result type');
+      }
+    });
+
+    reader.onError.listen((event) {
+      completer.completeError(reader.error ?? 'Error reading blob');
+    });
+
+    return completer.future;
+  }
+
+  Future<void> sendAudio(html.Blob audioBlob) async {
+    final uri = Uri.parse('http://127.0.0.1:5000/speech-to-text');
+    final bytes = await blobToBytes(audioBlob);
+
+    try {
+      final request = http.MultipartRequest('POST', uri)
+        ..files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            bytes,
+            filename: 'audio.webm',
+            contentType: MediaType('audio', 'webm'),
+          ),
+        );
+
+      final response = await request.send();
+
+      if (response.statusCode == 200) {
+        final respStr = await response.stream.bytesToString();
+        print('Server response: $respStr');
+      } else {
+        print('Upload failed with status: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error uploading audio: $e');
+    }
+  }
+
+  // both
+  @override
+  void initState() {
+    super.initState();
+
+    determinePosition();
   }
 
   // MapControls
@@ -70,12 +121,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _errorMessage;
 
   final LatLng fallbackLocation = const LatLng(32.7333, -97.1133);
-
-  @override
-  void initState() {
-    super.initState();
-    determinePosition();
-  }
 
   Future<void> determinePosition() async {
     setState(() {
@@ -167,25 +212,35 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     },
                   ),
-
-                  if (_errorMessage != null)
-                    Positioned(
-                      bottom: 20,
-                      left: 20,
-                      right: 20,
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        color: Colors.redAccent,
-                        child: Text(
-                          _errorMessage!,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
+                  _errorMessage != null
+                      ? Positioned(
+                          bottom: 20,
+                          left: 20,
+                          right: 20,
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            color: Colors.redAccent,
+                            child: Text(
+                              _errorMessage!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
                           ),
-                          textAlign: TextAlign.center,
+                        )
+                      : Align(
+                          alignment: Alignment.bottomCenter,
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 20),
+                            child: FloatingActionButton(
+                              onPressed: toggleRecording,
+                              tooltip: 'Record Audio',
+                              child: Icon(isRecording ? Icons.stop : Icons.mic),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
                 ],
               ),
       ),
@@ -194,13 +249,6 @@ class _HomeScreenState extends State<HomeScreen> {
         tooltip: 'Refresh Location',
         child: const Icon(Icons.my_location),
       ),
-      persistentFooterButtons: [
-        FloatingActionButton(
-          onPressed: _toggleRecording,
-          tooltip: 'Record Audio',
-          child: Icon(_isRecording ? Icons.stop : Icons.mic),
-        ),
-      ],
     );
   }
 }
