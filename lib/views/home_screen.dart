@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -80,7 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> sendAudio(html.Blob audioBlob) async {
-    final uri = Uri.parse('http://127.0.0.1:5000/speech-to-text');
+    final uri = Uri.parse('http://127.0.0.1:7860/speech-to-text');
     final bytes = await blobToBytes(audioBlob);
 
     try {
@@ -99,11 +100,60 @@ class _HomeScreenState extends State<HomeScreen> {
       if (response.statusCode == 200) {
         final respStr = await response.stream.bytesToString();
         print('Server response: $respStr');
+        final data = jsonDecode(respStr);
+        _handleServerResponse(data['polyline']['polyline']);
       } else {
         print('Upload failed with status: ${response.statusCode}');
       }
     } catch (e) {
       print('Error uploading audio: $e');
+    }
+  }
+
+  void _handleServerResponse(List<dynamic> respStr) {
+    List<dynamic> coords = respStr;
+
+    List<LatLng> polylineCoords = coords
+        .map((point) => LatLng(point[0], point[1]))
+        .toList();
+
+    _showPolyline(polylineCoords);
+  }
+
+  LatLngBounds _getBounds(List<LatLng> points) {
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (LatLng point in points) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLng) minLng = point.longitude;
+      if (point.longitude > maxLng) maxLng = point.longitude;
+    }
+
+    return LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+  }
+
+  void _showPolyline(List<LatLng> points) {
+    final polyline = Polyline(
+      polylineId: PolylineId("route"),
+      color: Colors.blue,
+      width: 5,
+      points: points,
+    );
+
+    setState(() {
+      _polylines.clear();
+      _polylines.add(polyline);
+    });
+
+    if (_mapController != null && points.isNotEmpty) {
+      _mapController?.animateCamera(CameraUpdate.newLatLngBounds(_getBounds(points), 50));
     }
   }
 
@@ -117,6 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // MapControls
   GoogleMapController? _mapController;
+  final Set<Polyline> _polylines = {};
   LatLng? _currentLocation;
   String? _errorMessage;
 
@@ -125,6 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> determinePosition() async {
     setState(() {
       _errorMessage = null;
+      _polylines.clear();
     });
 
     try {
@@ -202,6 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       target: _currentLocation!,
                       zoom: 16,
                     ),
+                    polylines: _polylines,
                     markers: {
                       Marker(
                         markerId: const MarkerId('current_location'),
@@ -211,6 +264,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     },
+                  ),
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: FloatingActionButton(
+                        onPressed: toggleRecording,
+                        tooltip: 'Record Audio',
+                        child: Icon(isRecording ? Icons.stop : Icons.mic),
+                      ),
+                    ),
                   ),
                   _errorMessage != null
                       ? Positioned(
@@ -230,17 +294,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         )
-                      : Align(
-                          alignment: Alignment.bottomCenter,
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 20),
-                            child: FloatingActionButton(
-                              onPressed: toggleRecording,
-                              tooltip: 'Record Audio',
-                              child: Icon(isRecording ? Icons.stop : Icons.mic),
-                            ),
-                          ),
-                        ),
+                      : Container(),
                 ],
               ),
       ),
